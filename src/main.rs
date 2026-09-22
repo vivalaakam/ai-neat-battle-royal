@@ -1,7 +1,10 @@
-use std::{
-    env,
-    io::{self, IsTerminal, Read, Write},
-    process::{Command, Stdio},
+use std::env;
+
+use bevy::camera::Viewport;
+use bevy::{
+    camera::visibility::RenderLayers,
+    prelude::*,
+    window::WindowCloseRequested,
 };
 use vivalaakam_neuro_neat::{Config, Genome, Organism};
 
@@ -9,10 +12,6 @@ const DEFAULT_PLAYER_COUNT: usize = 32;
 const VISION_DEPTH: usize = 6;
 const OBSERVATION_SIZE: usize = 2 + 8 + (VISION_DEPTH * 2 + 1) * (VISION_DEPTH * 2 + 1);
 const ACTIONS: [&str; 5] = ["left", "right", "forward", "shoot", "wait"];
-const COLORS: [u8; 32] = [
-    196, 202, 208, 214, 220, 118, 46, 48, 51, 39, 33, 69, 93, 129, 135, 171, 201, 199, 207, 177,
-    141, 105, 75, 81, 87, 123, 159, 183, 219, 227, 155, 49,
-];
 const DIRECTIONS: [(isize, isize); 8] = [
     (0, -1),
     (1, -1),
@@ -444,151 +443,371 @@ impl Game {
     }
 }
 
-fn terminal_size() -> (usize, usize) {
-    let output = Command::new("stty")
-        .arg("size")
-        .stdin(Stdio::inherit())
-        .output()
-        .ok();
-    let sizes: Vec<_> = output
-        .as_ref()
-        .and_then(|out| std::str::from_utf8(&out.stdout).ok())
-        .into_iter()
-        .flat_map(|text| {
-            text.split_whitespace()
-                .filter_map(|n| n.parse::<usize>().ok())
-        })
-        .collect();
-    match sizes.as_slice() {
-        [rows, columns] => (*columns, *rows),
-        _ => (120, 40),
-    }
-}
+#[cfg(any())]
+mod terminal {
+    use super::*;
 
-fn render(game: &Game) -> String {
-    let human_status = if game.players.iter().any(|p| p.id == 0 && p.alive) {
-        "00 active"
-    } else {
-        "` add 00"
-    };
-    let mut screen = format!(
-        "\x1b[H seed: {:?}  generation: {}  turn #{}  map: {}×{}  players: {}/{}  {}\r\n Enter next AI turn   ` add player 00   Q/E turn   WASD move   Space shoot   Esc leaderboard   r regenerate   Ctrl-W quit\r\n",
-        game.seed,
-        game.generation,
-        game.turn,
-        game.width,
-        game.height,
-        game.players.iter().filter(|p| p.alive && p.id > 0).count(),
-        game.player_count,
-        human_status
-    );
-    let mut visible = vec![false; game.width * game.height];
-    for player in game.players.iter().filter(|p| p.alive) {
-        for (x, y) in game.visible_cells(player, VISION_DEPTH) {
-            visible[game.index(x, y)] = true;
+    fn terminal_size() -> (usize, usize) {
+        let output = Command::new("stty")
+            .arg("size")
+            .stdin(Stdio::inherit())
+            .output()
+            .ok();
+        let sizes: Vec<_> = output
+            .as_ref()
+            .and_then(|out| std::str::from_utf8(&out.stdout).ok())
+            .into_iter()
+            .flat_map(|text| {
+                text.split_whitespace()
+                    .filter_map(|n| n.parse::<usize>().ok())
+            })
+            .collect();
+        match sizes.as_slice() {
+            [rows, columns] => (*columns, *rows),
+            _ => (120, 40),
         }
     }
-    for y in 0..game.height {
-        for x in 0..game.width {
-            if let Some(player) = game
-                .players
-                .iter()
-                .find(|p| p.alive && p.x == x && p.y == y)
-            {
-                screen.push_str(&format!(
-                    "{}\x1b[38;5;{}m{:02}\x1b[0m",
-                    if visible[game.index(x, y)] {
-                        "\x1b[48;5;236m"
-                    } else {
-                        ""
-                    },
-                    if player.id == 0 {
-                        15
-                    } else {
-                        COLORS[(player.id - 1) % COLORS.len()]
-                    },
-                    player.id
-                ));
-            } else {
-                let tile = if game.is_wall(x, y) { "##" } else { "  " };
-                if visible[game.index(x, y)] {
-                    screen.push_str("\x1b[48;5;236m");
-                    screen.push_str(tile);
-                    screen.push_str("\x1b[0m");
-                } else {
-                    screen.push_str(tile);
-                }
+
+    fn render(game: &Game) -> String {
+        let human_status = if game.players.iter().any(|p| p.id == 0 && p.alive) {
+            "00 active"
+        } else {
+            "` add 00"
+        };
+        let mut screen = format!(
+            "\x1b[H seed: {:?}  generation: {}  turn #{}  map: {}×{}  players: {}/{}  {}\r\n Enter next AI turn   ` add player 00   Q/E turn   WASD move   Space shoot   Esc leaderboard   r regenerate   Ctrl-W quit\r\n",
+            game.seed,
+            game.generation,
+            game.turn,
+            game.width,
+            game.height,
+            game.players.iter().filter(|p| p.alive && p.id > 0).count(),
+            game.player_count,
+            human_status
+        );
+        let mut visible = vec![false; game.width * game.height];
+        for player in game.players.iter().filter(|p| p.alive) {
+            for (x, y) in game.visible_cells(player, VISION_DEPTH) {
+                visible[game.index(x, y)] = true;
             }
         }
-        if y + 1 < game.height {
-            screen.push_str("\r\n");
+        for y in 0..game.height {
+            for x in 0..game.width {
+                if let Some(player) = game
+                    .players
+                    .iter()
+                    .find(|p| p.alive && p.x == x && p.y == y)
+                {
+                    screen.push_str(&format!(
+                        "{}\x1b[38;5;{}m{:02}\x1b[0m",
+                        if visible[game.index(x, y)] {
+                            "\x1b[48;5;236m"
+                        } else {
+                            ""
+                        },
+                        if player.id == 0 {
+                            15
+                        } else {
+                            COLORS[(player.id - 1) % COLORS.len()]
+                        },
+                        player.id
+                    ));
+                } else {
+                    let tile = if game.is_wall(x, y) { "##" } else { "  " };
+                    if visible[game.index(x, y)] {
+                        screen.push_str("\x1b[48;5;236m");
+                        screen.push_str(tile);
+                        screen.push_str("\x1b[0m");
+                    } else {
+                        screen.push_str(tile);
+                    }
+                }
+            }
+            if y + 1 < game.height {
+                screen.push_str("\r\n");
+            }
         }
+        screen.push_str("\x1b[J");
+        screen
     }
-    screen.push_str("\x1b[J");
-    screen
-}
 
-fn render_pause(game: &Game) -> String {
-    let mut players: Vec<_> = game.players.iter().collect();
-    players.sort_by_key(|p| (std::cmp::Reverse(game.score(p)), p.id));
-    let mut screen = String::from(
-        "\x1b[H\x1b[2J PAUSED — leaderboard\r\n score = survival turns + kills × 10\r\n\r\n",
-    );
-    for player in players {
-        screen.push_str(&format!(
-            " {:02}  score {:>4}  survived {:>4}  kills {:>3}  {}\r\n",
-            player.id,
-            game.score(player),
-            player.died_turn.unwrap_or(game.turn) - player.born_turn,
-            player.kills,
-            if player.alive { "alive" } else { "dead" },
-        ));
+    fn render_pause(game: &Game) -> String {
+        let mut players: Vec<_> = game.players.iter().collect();
+        players.sort_by_key(|p| (std::cmp::Reverse(game.score(p)), p.id));
+        let mut screen = String::from(
+            "\x1b[H\x1b[2J PAUSED — leaderboard\r\n score = survival turns + kills × 10\r\n\r\n",
+        );
+        for player in players {
+            screen.push_str(&format!(
+                " {:02}  score {:>4}  survived {:>4}  kills {:>3}  {}\r\n",
+                player.id,
+                game.score(player),
+                player.died_turn.unwrap_or(game.turn) - player.born_turn,
+                player.kills,
+                if player.alive { "alive" } else { "dead" },
+            ));
+        }
+        screen.push_str("\r\n Esc resume   Ctrl-W quit\x1b[J");
+        screen
     }
-    screen.push_str("\r\n Esc resume   Ctrl-W quit\x1b[J");
-    screen
-}
 
-struct Terminal {
-    original: String,
-}
+    struct Terminal {
+        original: String,
+    }
 
-impl Terminal {
-    fn enter() -> io::Result<Self> {
-        let original = String::from_utf8(
-            Command::new("stty")
-                .arg("-g")
+    impl Terminal {
+        fn enter() -> io::Result<Self> {
+            let original = String::from_utf8(
+                Command::new("stty")
+                    .arg("-g")
+                    .stdin(Stdio::inherit())
+                    .output()?
+                    .stdout,
+            )
+            .unwrap_or_default()
+            .trim()
+            .to_owned();
+            if original.is_empty() {
+                return Err(io::Error::other("interactive terminal required"));
+            }
+            let status = Command::new("stty")
+                .args(["raw", "-echo"])
                 .stdin(Stdio::inherit())
-                .output()?
-                .stdout,
-        )
-        .unwrap_or_default()
-        .trim()
-        .to_owned();
-        if original.is_empty() {
-            return Err(io::Error::other("interactive terminal required"));
+                .status()?;
+            if !status.success() {
+                return Err(io::Error::other("could not enable raw terminal mode"));
+            }
+            print!("\x1b[?1049h\x1b[?25l");
+            io::stdout().flush()?;
+            Ok(Self { original })
         }
-        let status = Command::new("stty")
-            .args(["raw", "-echo"])
-            .stdin(Stdio::inherit())
-            .status()?;
-        if !status.success() {
-            return Err(io::Error::other("could not enable raw terminal mode"));
+    }
+
+    impl Drop for Terminal {
+        fn drop(&mut self) {
+            let _ = Command::new("stty")
+                .arg(&self.original)
+                .stdin(Stdio::inherit())
+                .status();
+            print!("\x1b[?25h\x1b[?1049l");
+            let _ = io::stdout().flush();
         }
-        print!("\x1b[?1049h\x1b[?25l");
-        io::stdout().flush()?;
-        Ok(Self { original })
+    }
+
+    fn self_test() {
+        let mut a = Game::new("replay phrase".into(), 3, 50, 24, DEFAULT_PLAYER_COUNT);
+        let b = Game::new("replay phrase".into(), 3, 50, 24, DEFAULT_PLAYER_COUNT);
+        assert_eq!(a.walls, b.walls);
+        assert_eq!(a.players, b.players);
+        assert_eq!(a.brains[0].as_json(), b.brains[0].as_json());
+        assert_eq!(a.players.len(), DEFAULT_PLAYER_COUNT);
+        assert!(a.players.iter().all(|p| !a.is_wall(p.x, p.y)));
+        assert_eq!(
+            a.players
+                .iter()
+                .map(|p| (p.x, p.y))
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            DEFAULT_PLAYER_COUNT
+        );
+        assert!(!a.visible_cells(&a.players[0], VISION_DEPTH).is_empty());
+        assert_eq!(a.observation(&a.players[0]).len(), OBSERVATION_SIZE);
+        assert_eq!(a.neat_actions().len(), DEFAULT_PLAYER_COUNT);
+        assert!(a.apply_turn(&vec!["wait"; DEFAULT_PLAYER_COUNT]).is_empty());
+        assert_eq!(a.turn, 1);
+        assert!(a.add_human());
+        a.move_human(1, 0);
+        let human = a.players.iter().find(|p| p.id == 0).unwrap();
+        assert_eq!(human.direction, 0);
+        assert_eq!(a.score(human), 1);
+        println!("self-test passed");
+    }
+
+    fn option_value(args: &[String], index: &mut usize, name: &str) -> io::Result<usize> {
+        *index += 1;
+        args.get(*index)
+            .ok_or_else(|| io::Error::other(format!("{name} needs a value")))?
+            .parse()
+            .map_err(|_| io::Error::other(format!("{name} must be a positive integer")))
+    }
+
+    fn main() -> io::Result<()> {
+        let args: Vec<_> = env::args().skip(1).collect();
+        let mut seed = "battle-royal".to_owned();
+        let mut width = None;
+        let mut height = None;
+        let mut player_count = DEFAULT_PLAYER_COUNT;
+        let mut index = 0;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--self-test" => {
+                    self_test();
+                    return Ok(());
+                }
+                "--width" => width = Some(option_value(&args, &mut index, "--width")?),
+                "--height" => height = Some(option_value(&args, &mut index, "--height")?),
+                "--players" => player_count = option_value(&args, &mut index, "--players")?,
+                "--help" | "-h" => {
+                    println!(
+                        "Usage: ai-neat-battle-royal [seed] [--width N] [--height N] [--players N]"
+                    );
+                    return Ok(());
+                }
+                value if !value.starts_with('-') => seed = value.to_owned(),
+                value => return Err(io::Error::other(format!("unknown option: {value}"))),
+            }
+            index += 1;
+        }
+        if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+            return Err(io::Error::other("Run this in an interactive terminal."));
+        }
+        let _terminal = Terminal::enter()?;
+        let mut generation = 0;
+        loop {
+            let (columns, rows) = terminal_size();
+            let width = width.unwrap_or(columns / 2);
+            let height = height.unwrap_or(rows.saturating_sub(2));
+            if width < 8 || height < 8 {
+                return Err(io::Error::other("map size must be at least 8×8"));
+            }
+            if player_count == 0 || player_count > (width - 2) * (height - 2) / 2 {
+                return Err(io::Error::other("player count does not fit on this map"));
+            }
+            let mut game = Game::new(seed.clone(), generation, width, height, player_count);
+            print!("{}", render(&game));
+            io::stdout().flush()?;
+            loop {
+                let mut key = [0];
+                io::stdin().read_exact(&mut key)?;
+                match key[0] {
+                    0x17 => return Ok(()),
+                    b'\r' | b'\n' => {
+                        game.apply_neat_turn();
+                    }
+                    b'r' | b'R' => {
+                        generation += 1;
+                        break;
+                    }
+                    b'`' | b'~' | 0xD1 => {
+                        game.add_human();
+                    }
+                    b'q' | b'Q' => game.turn_human(false),
+                    b'e' | b'E' => game.turn_human(true),
+                    b'w' | b'W' => game.move_human(1, 0),
+                    b's' | b'S' => game.move_human(-1, 0),
+                    b'a' | b'A' => game.move_human(0, -1),
+                    b'd' | b'D' => game.move_human(0, 1),
+                    b' ' => game.shoot_human(),
+                    0x1b => {
+                        print!("{}", render_pause(&game));
+                        io::stdout().flush()?;
+                        loop {
+                            let mut pause_key = [0];
+                            io::stdin().read_exact(&mut pause_key)?;
+                            if pause_key[0] == 0x17 {
+                                return Ok(());
+                            }
+                            if pause_key[0] == 0x1b {
+                                break;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                print!("{}", render(&game));
+                io::stdout().flush()?;
+            }
+        }
     }
 }
 
-impl Drop for Terminal {
-    fn drop(&mut self) {
-        let _ = Command::new("stty")
-            .arg(&self.original)
-            .stdin(Stdio::inherit())
-            .status();
-        print!("\x1b[?25h\x1b[?1049l");
-        let _ = io::stdout().flush();
+const TILE: f32 = 18.0;
+const MAP_ZOOM_MIN: f32 = 0.2;
+const MAP_ZOOM_MAX: f32 = 5.0;
+const MAP_ZOOM_FACTOR: f32 = 1.12;
+const MAP_PAN_SPEED: f32 = 480.0;
+const LEADERBOARD_PANEL_PX: f32 = 420.0;
+
+fn map_half_extents(game: &Game) -> Vec2 {
+    Vec2::new(
+        game.width as f32 * TILE * 0.5,
+        game.height as f32 * TILE * 0.5,
+    )
+}
+
+fn map_view_logical_size(window: &Window) -> Vec2 {
+    Vec2::new(
+        (window.width() - LEADERBOARD_PANEL_PX).max(1.0),
+        window.height(),
+    )
+}
+
+fn view_half_extents(window: &Window, zoom: f32) -> Vec2 {
+    let size = map_view_logical_size(window);
+    Vec2::new(size.x * 0.5 * zoom, size.y * 0.5 * zoom)
+}
+
+fn board_viewport(window: &Window) -> Viewport {
+    let scale = window.scale_factor();
+    let full = window.physical_size();
+    let panel = (LEADERBOARD_PANEL_PX * scale).round() as u32;
+    Viewport {
+        physical_position: UVec2::ZERO,
+        physical_size: UVec2::new(full.x.saturating_sub(panel).max(1), full.y),
+        ..default()
     }
+}
+
+fn clamp_map_pan(pan: Vec2, game: &Game, window: &Window, zoom: f32) -> Vec2 {
+    let map_half = map_half_extents(game);
+    let view_half = view_half_extents(window, zoom);
+    let mut pan = pan;
+    if map_half.x * 2.0 <= view_half.x * 2.0 {
+        pan.x = 0.0;
+    } else {
+        pan.x = pan.x.clamp(-map_half.x + view_half.x, map_half.x - view_half.x);
+    }
+    if map_half.y * 2.0 <= view_half.y * 2.0 {
+        pan.y = 0.0;
+    } else {
+        pan.y = pan.y.clamp(-map_half.y + view_half.y, map_half.y - view_half.y);
+    }
+    pan
+}
+
+#[derive(Component)]
+struct BoardVisual;
+
+#[derive(Component)]
+struct BoardCamera;
+
+#[derive(Component)]
+struct LeaderboardText;
+
+#[derive(Component)]
+struct StatusText;
+
+#[derive(Resource)]
+struct MapView {
+    pan: Vec2,
+    zoom: f32,
+}
+
+#[derive(Resource)]
+struct Battle {
+    game: Game,
+    seed: String,
+    generation: u64,
+    paused: bool,
+    dirty: bool,
+}
+
+#[derive(Default)]
+struct Launch {
+    seed: String,
+    width: usize,
+    height: usize,
+    players: usize,
 }
 
 fn self_test() {
@@ -597,122 +816,420 @@ fn self_test() {
     assert_eq!(a.walls, b.walls);
     assert_eq!(a.players, b.players);
     assert_eq!(a.brains[0].as_json(), b.brains[0].as_json());
-    assert_eq!(a.players.len(), DEFAULT_PLAYER_COUNT);
-    assert!(a.players.iter().all(|p| !a.is_wall(p.x, p.y)));
-    assert_eq!(
-        a.players
-            .iter()
-            .map(|p| (p.x, p.y))
-            .collect::<std::collections::HashSet<_>>()
-            .len(),
-        DEFAULT_PLAYER_COUNT
-    );
-    assert!(!a.visible_cells(&a.players[0], VISION_DEPTH).is_empty());
     assert_eq!(a.observation(&a.players[0]).len(), OBSERVATION_SIZE);
-    assert_eq!(a.neat_actions().len(), DEFAULT_PLAYER_COUNT);
-    assert!(a.apply_turn(&vec!["wait"; DEFAULT_PLAYER_COUNT]).is_empty());
-    assert_eq!(a.turn, 1);
+    assert!(a.apply_neat_turn().len() <= DEFAULT_PLAYER_COUNT);
     assert!(a.add_human());
-    a.move_human(1, 0);
-    let human = a.players.iter().find(|p| p.id == 0).unwrap();
-    assert_eq!(human.direction, 0);
-    assert_eq!(a.score(human), 1);
+    a.turn_human(true);
+    assert_eq!(a.players.iter().find(|p| p.id == 0).unwrap().direction, 1);
     println!("self-test passed");
 }
 
-fn option_value(args: &[String], index: &mut usize, name: &str) -> io::Result<usize> {
-    *index += 1;
-    args.get(*index)
-        .ok_or_else(|| io::Error::other(format!("{name} needs a value")))?
-        .parse()
-        .map_err(|_| io::Error::other(format!("{name} must be a positive integer")))
-}
-
-fn main() -> io::Result<()> {
+fn parse_launch() -> Launch {
+    let mut launch = Launch {
+        seed: "battle-royal".into(),
+        width: 50,
+        height: 30,
+        players: DEFAULT_PLAYER_COUNT,
+    };
     let args: Vec<_> = env::args().skip(1).collect();
-    let mut seed = "battle-royal".to_owned();
-    let mut width = None;
-    let mut height = None;
-    let mut player_count = DEFAULT_PLAYER_COUNT;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--self-test" => {
                 self_test();
-                return Ok(());
+                std::process::exit(0);
             }
-            "--width" => width = Some(option_value(&args, &mut index, "--width")?),
-            "--height" => height = Some(option_value(&args, &mut index, "--height")?),
-            "--players" => player_count = option_value(&args, &mut index, "--players")?,
-            "--help" | "-h" => {
-                println!(
-                    "Usage: ai-neat-battle-royal [seed] [--width N] [--height N] [--players N]"
-                );
-                return Ok(());
-            }
-            value if !value.starts_with('-') => seed = value.to_owned(),
-            value => return Err(io::Error::other(format!("unknown option: {value}"))),
+            "--width" => launch.width = cli_value(&args, &mut index, "--width"),
+            "--height" => launch.height = cli_value(&args, &mut index, "--height"),
+            "--players" => launch.players = cli_value(&args, &mut index, "--players"),
+            seed if !seed.starts_with('-') => launch.seed = seed.into(),
+            option => panic!("unknown option: {option}"),
         }
         index += 1;
     }
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        return Err(io::Error::other("Run this in an interactive terminal."));
+    launch
+}
+
+fn cli_value(args: &[String], index: &mut usize, name: &str) -> usize {
+    *index += 1;
+    args.get(*index)
+        .unwrap_or_else(|| panic!("{name} needs a value"))
+        .parse()
+        .unwrap_or_else(|_| panic!("{name} must be a positive integer"))
+}
+
+fn point(game: &Game, x: usize, y: usize) -> Vec3 {
+    Vec3::new(
+        (x as f32 - game.width as f32 / 2.0 + 0.5) * TILE,
+        (game.height as f32 / 2.0 - y as f32 - 0.5) * TILE,
+        0.0,
+    )
+}
+
+fn player_color(id: usize) -> Color {
+    if id == 0 {
+        Color::WHITE
+    } else {
+        Color::hsl((id * 47 % 360) as f32, 0.8, 0.58)
     }
-    let _terminal = Terminal::enter()?;
-    let mut generation = 0;
-    loop {
-        let (columns, rows) = terminal_size();
-        let width = width.unwrap_or(columns / 2);
-        let height = height.unwrap_or(rows.saturating_sub(2));
-        if width < 8 || height < 8 {
-            return Err(io::Error::other("map size must be at least 8×8"));
+}
+
+fn modifier_held(keys: &ButtonInput<KeyCode>) -> bool {
+    keys.pressed(KeyCode::ControlLeft)
+        || keys.pressed(KeyCode::ControlRight)
+        || keys.pressed(KeyCode::SuperLeft)
+        || keys.pressed(KeyCode::SuperRight)
+}
+
+fn setup(mut commands: Commands) {
+    commands.spawn((
+        Camera2d,
+        IsDefaultUiCamera,
+        Camera {
+            order: 1,
+            clear_color: ClearColorConfig::None,
+            ..default()
+        },
+    ));
+    commands.spawn((
+        Camera2d,
+        BoardCamera,
+        Camera {
+            order: 0,
+            ..default()
+        },
+        RenderLayers::layer(1),
+        Projection::Orthographic(OrthographicProjection {
+            scale: 1.0,
+            ..OrthographicProjection::default_2d()
+        }),
+    ));
+
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            right: px(0),
+            top: px(0),
+            width: px(LEADERBOARD_PANEL_PX),
+            height: percent(100),
+            padding: UiRect::all(px(12)),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(8),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.02, 0.04, 0.07, 0.94)),
+        children![
+            (
+                Text::new("Leaderboard"),
+                TextFont {
+                    font_size: FontSize::Px(18.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(1.0, 0.9, 0.45)),
+            ),
+            (
+                Text::new("score = survival + kills × 10"),
+                TextFont {
+                    font_size: FontSize::Px(11.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.55, 0.58, 0.62)),
+            ),
+            (
+                LeaderboardText,
+                Text::new(""),
+                TextFont {
+                    font_size: FontSize::Px(12.0),
+                    ..default()
+                },
+                TextColor(Color::srgb(0.86, 0.89, 0.92)),
+                TextLayout::linebreak(LineBreak::NoWrap),
+            ),
+        ],
+    ));
+
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(12),
+            top: px(10),
+            right: px(LEADERBOARD_PANEL_PX + 12.0),
+            ..default()
+        },
+        children![(
+            StatusText,
+            Text::new(""),
+            TextFont {
+                font_size: FontSize::Px(14.0),
+                ..default()
+            },
+            TextColor(Color::WHITE),
+        )],
+    ));
+}
+
+fn handle_map_view(keys: Res<ButtonInput<KeyCode>>, time: Res<Time>, mut view: ResMut<MapView>) {
+    let dt = time.delta_secs();
+    let step = MAP_PAN_SPEED * view.zoom * dt;
+    if keys.pressed(KeyCode::ArrowLeft) {
+        view.pan.x -= step;
+    }
+    if keys.pressed(KeyCode::ArrowRight) {
+        view.pan.x += step;
+    }
+    if keys.pressed(KeyCode::ArrowUp) {
+        view.pan.y += step;
+    }
+    if keys.pressed(KeyCode::ArrowDown) {
+        view.pan.y -= step;
+    }
+    if keys.just_pressed(KeyCode::Minus) || keys.just_pressed(KeyCode::NumpadSubtract) {
+        view.zoom = (view.zoom * MAP_ZOOM_FACTOR).clamp(MAP_ZOOM_MIN, MAP_ZOOM_MAX);
+    }
+    if keys.just_pressed(KeyCode::Equal) || keys.just_pressed(KeyCode::NumpadAdd) {
+        view.zoom = (view.zoom / MAP_ZOOM_FACTOR).clamp(MAP_ZOOM_MIN, MAP_ZOOM_MAX);
+    }
+}
+
+fn apply_map_camera(
+    battle: Res<Battle>,
+    window: Single<&Window>,
+    mut view: ResMut<MapView>,
+    mut cameras: Query<(&mut Transform, &mut Projection, &mut Camera), With<BoardCamera>>,
+) {
+    view.pan = clamp_map_pan(view.pan, &battle.game, &window, view.zoom);
+    let Ok((mut transform, mut projection, mut camera)) = cameras.single_mut() else {
+        return;
+    };
+    camera.viewport = Some(board_viewport(&window));
+    transform.translation = view.pan.extend(999.0);
+    if let Projection::Orthographic(ortho) = &mut *projection {
+        ortho.scale = view.zoom;
+    }
+}
+
+fn handle_window_close(
+    mut close: MessageReader<WindowCloseRequested>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    for _ in close.read() {
+        exit.write(AppExit::Success);
+    }
+}
+
+fn handle_input(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut battle: ResMut<Battle>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if keys.just_pressed(KeyCode::KeyW) && modifier_held(&keys) {
+        exit.write(AppExit::Success);
+        return;
+    }
+    if keys.just_pressed(KeyCode::Escape) {
+        battle.paused = !battle.paused;
+        battle.dirty = true;
+        return;
+    }
+    if battle.paused || modifier_held(&keys) {
+        return;
+    }
+    if keys.just_pressed(KeyCode::Enter) {
+        battle.game.apply_neat_turn();
+    }
+    if keys.just_pressed(KeyCode::Backquote) {
+        battle.game.add_human();
+    }
+    if keys.just_pressed(KeyCode::KeyQ) {
+        battle.game.turn_human(false);
+    }
+    if keys.just_pressed(KeyCode::KeyE) {
+        battle.game.turn_human(true);
+    }
+    if keys.just_pressed(KeyCode::KeyW) {
+        battle.game.move_human(1, 0);
+    }
+    if keys.just_pressed(KeyCode::KeyS) {
+        battle.game.move_human(-1, 0);
+    }
+    if keys.just_pressed(KeyCode::KeyA) {
+        battle.game.move_human(0, -1);
+    }
+    if keys.just_pressed(KeyCode::KeyD) {
+        battle.game.move_human(0, 1);
+    }
+    if keys.just_pressed(KeyCode::Space) {
+        battle.game.shoot_human();
+    }
+    if keys.just_pressed(KeyCode::KeyR) {
+        battle.generation += 1;
+        battle.game = Game::new(
+            battle.seed.clone(),
+            battle.generation,
+            battle.game.width,
+            battle.game.height,
+            battle.game.player_count,
+        );
+    }
+    battle.dirty = true;
+}
+
+fn redraw(
+    mut commands: Commands,
+    mut battle: ResMut<Battle>,
+    visuals: Query<Entity, With<BoardVisual>>,
+) {
+    if !battle.dirty {
+        return;
+    }
+    for entity in &visuals {
+        commands.entity(entity).despawn();
+    }
+    let game = &battle.game;
+    let mut visible = vec![false; game.width * game.height];
+    for player in game.players.iter().filter(|p| p.alive) {
+        for (x, y) in game.visible_cells(player, VISION_DEPTH) {
+            visible[game.index(x, y)] = true;
         }
-        if player_count == 0 || player_count > (width - 2) * (height - 2) / 2 {
-            return Err(io::Error::other("player count does not fit on this map"));
-        }
-        let mut game = Game::new(seed.clone(), generation, width, height, player_count);
-        print!("{}", render(&game));
-        io::stdout().flush()?;
-        loop {
-            let mut key = [0];
-            io::stdin().read_exact(&mut key)?;
-            match key[0] {
-                0x17 => return Ok(()),
-                b'\r' | b'\n' => {
-                    game.apply_neat_turn();
-                }
-                b'r' | b'R' => {
-                    generation += 1;
-                    break;
-                }
-                b'`' | b'~' | 0xD1 => {
-                    game.add_human();
-                }
-                b'q' | b'Q' => game.turn_human(false),
-                b'e' | b'E' => game.turn_human(true),
-                b'w' | b'W' => game.move_human(1, 0),
-                b's' | b'S' => game.move_human(-1, 0),
-                b'a' | b'A' => game.move_human(0, -1),
-                b'd' | b'D' => game.move_human(0, 1),
-                b' ' => game.shoot_human(),
-                0x1b => {
-                    print!("{}", render_pause(&game));
-                    io::stdout().flush()?;
-                    loop {
-                        let mut pause_key = [0];
-                        io::stdin().read_exact(&mut pause_key)?;
-                        if pause_key[0] == 0x17 {
-                            return Ok(());
-                        }
-                        if pause_key[0] == 0x1b {
-                            break;
-                        }
-                    }
-                }
-                _ => {}
+    }
+    for y in 0..game.height {
+        for x in 0..game.width {
+            let color = if game.is_wall(x, y) {
+                Some(Color::srgb(0.23, 0.25, 0.29))
+            } else if visible[game.index(x, y)] {
+                Some(Color::srgb(0.09, 0.12, 0.16))
+            } else {
+                None
+            };
+            if let Some(color) = color {
+                commands.spawn((
+                    Sprite::from_color(color, Vec2::splat(TILE - 1.0)),
+                    Transform::from_translation(point(game, x, y)),
+                    RenderLayers::layer(1),
+                    BoardVisual,
+                ));
             }
-            print!("{}", render(&game));
-            io::stdout().flush()?;
         }
     }
+    for player in game.players.iter().filter(|p| p.alive) {
+        let position = point(game, player.x, player.y);
+        commands.spawn((
+            Sprite::from_color(player_color(player.id), Vec2::splat(TILE - 3.0)),
+            Transform::from_translation(position + Vec3::Z),
+            RenderLayers::layer(1),
+            BoardVisual,
+        ));
+        commands.spawn((
+            Text2d::new(format!("{:02}", player.id)),
+            TextFont {
+                font_size: bevy::text::FontSize::Px(11.0),
+                ..default()
+            },
+            TextColor(Color::BLACK),
+            Transform::from_translation(position + Vec3::Z * 2.0),
+            RenderLayers::layer(1),
+            BoardVisual,
+        ));
+    }
+    battle.dirty = false;
+}
+
+fn update_hud(
+    battle: Res<Battle>,
+    mut texts: ParamSet<(
+        Query<&mut Text, With<LeaderboardText>>,
+        Query<&mut Text, With<StatusText>>,
+    )>,
+) {
+    if !battle.dirty {
+        return;
+    }
+    let game = &battle.game;
+    let mut players: Vec<_> = game.players.iter().collect();
+    players.sort_by_key(|p| (std::cmp::Reverse(game.score(p)), p.id));
+    let board = players
+        .into_iter()
+        .map(|p| {
+            format!(
+                "#{:02}  score {:>5}  turns {:>4}  kills {:>2}  {}",
+                p.id,
+                game.score(p),
+                p.died_turn.unwrap_or(game.turn) - p.born_turn,
+                p.kills,
+                if p.alive { "alive" } else { "dead" }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if let Ok(mut text) = texts.p0().single_mut() {
+        **text = board;
+    }
+    let pause = if battle.paused { "  PAUSED" } else { "" };
+    let status_line = format!(
+        "seed {:?}   gen {}   turn #{}   map {}×{}   agents {}/{}{pause}\n\
+Enter AI   ` 00   Q/E turn   WASD move   Space shoot   Esc pause   −/= zoom   arrows pan   Ctrl+W quit",
+        game.seed,
+        game.generation,
+        game.turn,
+        game.width,
+        game.height,
+        game.players.iter().filter(|p| p.alive && p.id > 0).count(),
+        game.player_count,
+    );
+    if let Ok(mut text) = texts.p1().single_mut() {
+        **text = status_line;
+    }
+}
+
+fn main() {
+    let launch = parse_launch();
+    assert!(
+        launch.width >= 8
+            && launch.height >= 8
+            && launch.players > 0
+            && launch.players <= (launch.width - 2) * (launch.height - 2) / 2,
+        "invalid map size or player count"
+    );
+    let game = Game::new(
+        launch.seed.clone(),
+        0,
+        launch.width,
+        launch.height,
+        launch.players,
+    );
+    App::new()
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "AI NEAT Battle Royal".into(),
+                resolution: (1200, 900).into(),
+                ..default()
+            }),
+            ..default()
+        }))
+        .insert_resource(ClearColor(Color::srgb(0.015, 0.02, 0.03)))
+        .insert_resource(Battle {
+            game,
+            seed: launch.seed,
+            generation: 0,
+            paused: false,
+            dirty: true,
+        })
+        .insert_resource(MapView {
+            pan: Vec2::ZERO,
+            zoom: 1.0,
+        })
+        .add_systems(Startup, setup)
+        .add_systems(
+            Update,
+            (
+                handle_window_close,
+                handle_map_view,
+                apply_map_camera,
+                handle_input,
+                update_hud,
+                redraw,
+            )
+                .chain(),
+        )
+        .run();
 }

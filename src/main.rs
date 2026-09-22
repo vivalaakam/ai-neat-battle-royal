@@ -3,9 +3,13 @@ use std::{
     io::{self, IsTerminal, Read, Write},
     process::{Command, Stdio},
 };
+use vivalaakam_neuro_neat::{Config, Genome, Organism};
 
-const PLAYER_COUNT: usize = 32;
-const COLORS: [u8; PLAYER_COUNT] = [
+const DEFAULT_PLAYER_COUNT: usize = 32;
+const VISION_DEPTH: usize = 6;
+const OBSERVATION_SIZE: usize = 2 + 8 + (VISION_DEPTH * 2 + 1) * (VISION_DEPTH * 2 + 1);
+const ACTIONS: [&str; 5] = ["left", "right", "forward", "shoot", "wait"];
+const COLORS: [u8; 32] = [
     196, 202, 208, 214, 220, 118, 46, 48, 51, 39, 33, 69, 93, 129, 135, 171, 201, 199, 207, 177,
     141, 105, 75, 81, 87, 123, 159, 183, 219, 227, 155, 49,
 ];
@@ -56,18 +60,48 @@ impl Rng {
     }
 }
 
+fn new_brains(seed: &str, generation: u64, player_count: usize) -> Vec<Organism> {
+    let config = Config::default();
+    (0..player_count)
+        .map(|id| {
+            let genome =
+                Genome::generate_genome(OBSERVATION_SIZE, ACTIONS.len(), Vec::new(), None, &config)
+                    .expect("NEAT genome generation failed");
+            let mut weights = genome.to_weights();
+            let mut rng = Rng::from_phrase(&format!("{seed}:agent:{id}"), generation);
+            let node_count = OBSERVATION_SIZE + ACTIONS.len();
+            for node in 0..node_count {
+                weights[6 + node * 4 + 1] = rng.next() as f32 / u64::MAX as f32 * 2.0 - 1.0;
+            }
+            for connection in 0..OBSERVATION_SIZE * ACTIONS.len() {
+                weights[6 + node_count * 4 + connection * 4 + 2] =
+                    rng.next() as f32 / u64::MAX as f32 * 2.0 - 1.0;
+            }
+            Organism::new(Genome::from_weights(weights))
+        })
+        .collect()
+}
+
 struct Game {
     seed: String,
     generation: u64,
     width: usize,
     height: usize,
+    player_count: usize,
     turn: u64,
     walls: Vec<bool>,
     players: Vec<Player>,
+    brains: Vec<Organism>,
 }
 
 impl Game {
-    fn new(seed: String, generation: u64, width: usize, height: usize) -> Self {
+    fn new(
+        seed: String,
+        generation: u64,
+        width: usize,
+        height: usize,
+        player_count: usize,
+    ) -> Self {
         let width = width.max(20);
         let height = height.max(12);
         let mut game = Self {
@@ -75,9 +109,11 @@ impl Game {
             generation,
             width,
             height,
+            player_count,
             turn: 0,
             walls: vec![false; width * height],
-            players: Vec::with_capacity(PLAYER_COUNT),
+            players: Vec::with_capacity(player_count + 1),
+            brains: new_brains(&seed, generation, player_count),
         };
         let mut rng = Rng::from_phrase(&seed, generation);
         game.generate(&mut rng);
@@ -124,10 +160,10 @@ impl Game {
             .filter(|&(x, y)| !self.is_wall(x, y))
             .collect();
         assert!(
-            free.len() >= PLAYER_COUNT,
-            "map is too small for 32 players"
+            free.len() >= self.player_count,
+            "map is too small for the requested player count"
         );
-        for id in 1..=PLAYER_COUNT {
+        for id in 1..=self.player_count {
             let pick = rng.range(free.len());
             let (x, y) = free.swap_remove(pick);
             self.players.push(Player {
@@ -194,7 +230,7 @@ impl Game {
         for p in self.players.iter().filter(|p| p.alive) {
             occupied[self.index(p.x, p.y)] = true;
         }
-        let mut proposed = vec![None; PLAYER_COUNT];
+        let mut proposed = vec![None; self.player_count];
         let width = self.width;
         let walls = &self.walls;
         for player in &mut self.players {
@@ -217,7 +253,7 @@ impl Game {
                 _ => {}
             }
         }
-        for id in 0..PLAYER_COUNT {
+        for id in 0..self.player_count {
             if let Some(target) = proposed[id]
                 && proposed
                     .iter()
@@ -230,11 +266,11 @@ impl Game {
                 self.players[id].y = target.1;
             }
         }
-        let mut hit = [false; PLAYER_COUNT];
-        let mut kills = [0; PLAYER_COUNT];
+        let mut hit = vec![false; self.player_count];
+        let mut kills = vec![0; self.player_count];
         for player in self.players.iter().filter(|p| p.alive && p.id > 0) {
             if actions.get(player.id - 1).copied() == Some("shoot") {
-                let visible = self.visible_cells(player, 6);
+                let visible = self.visible_cells(player, VISION_DEPTH);
                 for other in self
                     .players
                     .iter()
@@ -322,7 +358,7 @@ impl Game {
         let Some(shooter) = self.players.iter().find(|p| p.id == 0 && p.alive).cloned() else {
             return;
         };
-        let visible = self.visible_cells(&shooter, 6);
+        let visible = self.visible_cells(&shooter, VISION_DEPTH);
         let victims: Vec<_> = self
             .players
             .iter()
@@ -341,6 +377,70 @@ impl Game {
 
     fn score(&self, player: &Player) -> u64 {
         (player.died_turn.unwrap_or(self.turn) - player.born_turn) + player.kills * 10
+    }
+
+    fn observation(&self, player: &Player) -> Vec<f32> {
+        let mut input = Vec::with_capacity(OBSERVATION_SIZE);
+        input.push(player.x as f32 / (self.width - 1) as f32 * 2.0 - 1.0);
+        input.push(player.y as f32 / (self.height - 1) as f32 * 2.0 - 1.0);
+        input.extend(
+            (0..DIRECTIONS.len()).map(|direction| (direction == player.direction) as u8 as f32),
+        );
+        let mut visible = vec![false; self.width * self.height];
+        for (x, y) in self.visible_cells(player, VISION_DEPTH) {
+            visible[self.index(x, y)] = true;
+        }
+        for relative_y in -(VISION_DEPTH as isize)..=VISION_DEPTH as isize {
+            for relative_x in -(VISION_DEPTH as isize)..=VISION_DEPTH as isize {
+                let x = player.x as isize + relative_x;
+                let y = player.y as isize + relative_y;
+                input.push(
+                    if x < 0
+                        || y < 0
+                        || x >= self.width as isize
+                        || y >= self.height as isize
+                        || !visible[self.index(x as usize, y as usize)]
+                    {
+                        -1.0
+                    } else if self.is_wall(x as usize, y as usize) {
+                        -0.5
+                    } else if self.players.iter().any(|p| {
+                        p.alive && p.id != player.id && p.x == x as usize && p.y == y as usize
+                    }) {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                );
+            }
+        }
+        input
+    }
+
+    fn neat_actions(&self) -> Vec<&'static str> {
+        let sensed: Vec<_> = self
+            .players
+            .iter()
+            .filter(|p| p.alive && p.id > 0)
+            .map(|p| (p.id, self.observation(p)))
+            .collect();
+        let mut actions = vec!["wait"; self.player_count];
+        for (id, input) in sensed {
+            let output = self.brains[id - 1].network.activate(input);
+            let action = output
+                .iter()
+                .enumerate()
+                .max_by(|(_, a), (_, b)| a.total_cmp(b))
+                .map(|(index, _)| index)
+                .unwrap_or(ACTIONS.len() - 1);
+            actions[id - 1] = ACTIONS[action];
+        }
+        actions
+    }
+
+    fn apply_neat_turn(&mut self) -> Vec<usize> {
+        let actions = self.neat_actions();
+        self.apply_turn(&actions)
     }
 }
 
@@ -372,17 +472,19 @@ fn render(game: &Game) -> String {
         "` add 00"
     };
     let mut screen = format!(
-        "\x1b[H seed: {:?}  generation: {}  turn: {}  players: {}/{}  {}\r\n ` add player 00   Q/E turn   WASD move   Space shoot   Esc leaderboard   r regenerate   Ctrl-W quit\r\n",
+        "\x1b[H seed: {:?}  generation: {}  turn #{}  map: {}×{}  players: {}/{}  {}\r\n Enter next AI turn   ` add player 00   Q/E turn   WASD move   Space shoot   Esc leaderboard   r regenerate   Ctrl-W quit\r\n",
         game.seed,
         game.generation,
         game.turn,
-        game.players.iter().filter(|p| p.alive).count(),
-        PLAYER_COUNT,
+        game.width,
+        game.height,
+        game.players.iter().filter(|p| p.alive && p.id > 0).count(),
+        game.player_count,
         human_status
     );
     let mut visible = vec![false; game.width * game.height];
     for player in game.players.iter().filter(|p| p.alive) {
-        for (x, y) in game.visible_cells(player, 6) {
+        for (x, y) in game.visible_cells(player, VISION_DEPTH) {
             visible[game.index(x, y)] = true;
         }
     }
@@ -403,7 +505,7 @@ fn render(game: &Game) -> String {
                     if player.id == 0 {
                         15
                     } else {
-                        COLORS[player.id - 1]
+                        COLORS[(player.id - 1) % COLORS.len()]
                     },
                     player.id
                 ));
@@ -418,7 +520,9 @@ fn render(game: &Game) -> String {
                 }
             }
         }
-        screen.push_str("\r\n");
+        if y + 1 < game.height {
+            screen.push_str("\r\n");
+        }
     }
     screen.push_str("\x1b[J");
     screen
@@ -488,11 +592,12 @@ impl Drop for Terminal {
 }
 
 fn self_test() {
-    let mut a = Game::new("replay phrase".into(), 3, 50, 24);
-    let b = Game::new("replay phrase".into(), 3, 50, 24);
+    let mut a = Game::new("replay phrase".into(), 3, 50, 24, DEFAULT_PLAYER_COUNT);
+    let b = Game::new("replay phrase".into(), 3, 50, 24, DEFAULT_PLAYER_COUNT);
     assert_eq!(a.walls, b.walls);
     assert_eq!(a.players, b.players);
-    assert_eq!(a.players.len(), PLAYER_COUNT);
+    assert_eq!(a.brains[0].as_json(), b.brains[0].as_json());
+    assert_eq!(a.players.len(), DEFAULT_PLAYER_COUNT);
     assert!(a.players.iter().all(|p| !a.is_wall(p.x, p.y)));
     assert_eq!(
         a.players
@@ -500,10 +605,12 @@ fn self_test() {
             .map(|p| (p.x, p.y))
             .collect::<std::collections::HashSet<_>>()
             .len(),
-        PLAYER_COUNT
+        DEFAULT_PLAYER_COUNT
     );
-    assert!(!a.visible_cells(&a.players[0], 6).is_empty());
-    assert!(a.apply_turn(&["wait"; PLAYER_COUNT]).is_empty());
+    assert!(!a.visible_cells(&a.players[0], VISION_DEPTH).is_empty());
+    assert_eq!(a.observation(&a.players[0]).len(), OBSERVATION_SIZE);
+    assert_eq!(a.neat_actions().len(), DEFAULT_PLAYER_COUNT);
+    assert!(a.apply_turn(&vec!["wait"; DEFAULT_PLAYER_COUNT]).is_empty());
     assert_eq!(a.turn, 1);
     assert!(a.add_human());
     a.move_human(1, 0);
@@ -513,16 +620,41 @@ fn self_test() {
     println!("self-test passed");
 }
 
+fn option_value(args: &[String], index: &mut usize, name: &str) -> io::Result<usize> {
+    *index += 1;
+    args.get(*index)
+        .ok_or_else(|| io::Error::other(format!("{name} needs a value")))?
+        .parse()
+        .map_err(|_| io::Error::other(format!("{name} must be a positive integer")))
+}
+
 fn main() -> io::Result<()> {
     let args: Vec<_> = env::args().skip(1).collect();
-    if args.first().is_some_and(|arg| arg == "--self-test") {
-        self_test();
-        return Ok(());
+    let mut seed = "battle-royal".to_owned();
+    let mut width = None;
+    let mut height = None;
+    let mut player_count = DEFAULT_PLAYER_COUNT;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--self-test" => {
+                self_test();
+                return Ok(());
+            }
+            "--width" => width = Some(option_value(&args, &mut index, "--width")?),
+            "--height" => height = Some(option_value(&args, &mut index, "--height")?),
+            "--players" => player_count = option_value(&args, &mut index, "--players")?,
+            "--help" | "-h" => {
+                println!(
+                    "Usage: ai-neat-battle-royal [seed] [--width N] [--height N] [--players N]"
+                );
+                return Ok(());
+            }
+            value if !value.starts_with('-') => seed = value.to_owned(),
+            value => return Err(io::Error::other(format!("unknown option: {value}"))),
+        }
+        index += 1;
     }
-    let seed = args
-        .first()
-        .cloned()
-        .unwrap_or_else(|| "battle-royal".into());
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(io::Error::other("Run this in an interactive terminal."));
     }
@@ -530,12 +662,15 @@ fn main() -> io::Result<()> {
     let mut generation = 0;
     loop {
         let (columns, rows) = terminal_size();
-        let mut game = Game::new(
-            seed.clone(),
-            generation,
-            columns / 2,
-            rows.saturating_sub(2),
-        );
+        let width = width.unwrap_or(columns / 2);
+        let height = height.unwrap_or(rows.saturating_sub(2));
+        if width < 8 || height < 8 {
+            return Err(io::Error::other("map size must be at least 8×8"));
+        }
+        if player_count == 0 || player_count > (width - 2) * (height - 2) / 2 {
+            return Err(io::Error::other("player count does not fit on this map"));
+        }
+        let mut game = Game::new(seed.clone(), generation, width, height, player_count);
         print!("{}", render(&game));
         io::stdout().flush()?;
         loop {
@@ -543,6 +678,9 @@ fn main() -> io::Result<()> {
             io::stdin().read_exact(&mut key)?;
             match key[0] {
                 0x17 => return Ok(()),
+                b'\r' | b'\n' => {
+                    game.apply_neat_turn();
+                }
                 b'r' | b'R' => {
                     generation += 1;
                     break;

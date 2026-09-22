@@ -4,3 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+vivalaakam_neuro_neat = { version = "0.1.20", path = "../neat_rs/neat" }

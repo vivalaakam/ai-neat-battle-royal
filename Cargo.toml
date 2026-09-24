@@ -5,4 +5,6 @@ edition = "2024"
 
 [dependencies]
 bevy = "0.19.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 vivalaakam_neuro_neat = { version = "0.1.20", path = "../neat_rs/neat" }

@@ -121,6 +121,8 @@ name = "ai-neat-battle-royal"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "serde",
+ "serde_json",
  "vivalaakam_neuro_neat",
 ]
 

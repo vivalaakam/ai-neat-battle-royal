@@ -9,6 +9,7 @@ use launch::Launch;
 fn main() {
     let launch = Launch::parse();
     launch.validate();
+    app::ensure_emoji_font();
 
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {

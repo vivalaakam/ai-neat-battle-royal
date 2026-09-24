@@ -79,6 +79,8 @@ impl Game {
                         p.alive && p.id != player.id && p.x == x as usize && p.y == y as usize
                     }) {
                         1.0
+                    } else if self.has_treat(x as usize, y as usize) {
+                        0.5
                     } else {
                         0.0
                     },

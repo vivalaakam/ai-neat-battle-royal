@@ -4,7 +4,7 @@ use super::brain::{breed_next_generation, new_brains};
 use super::state::Game;
 
 pub fn map_capacity(width: usize, height: usize) -> usize {
-    (width - 2) * (height - 2) / 2
+    Game::spawn_cell_count(width, height)
 }
 
 fn trial_map_seed(seed: &str) -> String {

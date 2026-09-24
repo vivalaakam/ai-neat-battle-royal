@@ -20,10 +20,12 @@ impl Game {
             direction: 0,
             alive: true,
             kills: 0,
+            treats: 0,
             tiles_walked: 1,
             born_turn: self.turn,
             died_turn: None,
         });
+        self.try_collect_treat(self.players.len() - 1);
         true
     }
 

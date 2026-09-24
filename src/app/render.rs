@@ -44,6 +44,8 @@ pub fn redraw(
         for x in 0..game.width {
             let color = if game.is_wall(x, y) {
                 Some(Color::srgb(0.23, 0.25, 0.29))
+            } else if game.has_treat(x, y) {
+                Some(Color::srgb(0.95, 0.72, 0.18))
             } else if visible[game.index(x, y)] {
                 Some(Color::srgb(0.09, 0.12, 0.16))
             } else {

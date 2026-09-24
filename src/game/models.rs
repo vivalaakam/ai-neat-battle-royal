@@ -125,14 +125,14 @@ pub fn log_generation_best(game: &Game) {
         .map(|serial| serial.to_string())
         .unwrap_or_else(|| "?".into());
     eprintln!(
-        "gen {} best: lineage #{lineage}  slot {:02}  score {:>5}  turns {:>4}  kills {:>2}  walk {:>4}  {}",
+        "gen {} best: lineage #{lineage}  slot {:02}  score {:>5}  ⚔{:>2} 🍬{:>3} 👟{:>4} {}",
         game.generation,
         best.id,
         game.score(best),
-        best.died_turn.unwrap_or(game.turn) - best.born_turn,
         best.kills,
+        best.treats,
         best.tiles_walked,
-        if best.alive { "alive" } else { "dead" },
+        if best.alive { "🟢" } else { "🔴" },
     );
 }
 
@@ -155,11 +155,12 @@ pub fn save_best_if_new(game: &Game) {
 
     let lineage = organism_serial(brain).unwrap_or(0);
     let payload = format!(
-        "{{\n  \"seed\": {:?},\n  \"generation\": {},\n  \"lineage\": {lineage},\n  \"player_id\": {},\n  \"score\": {},\n  \"tiles_walked\": {},\n  \"kills\": {},\n  \"weights_hash\": \"{hash:016x}\",\n  \"genome\": {}\n}}",
+        "{{\n  \"seed\": {:?},\n  \"generation\": {},\n  \"lineage\": {lineage},\n  \"player_id\": {},\n  \"score\": {},\n  \"treats\": {},\n  \"tiles_walked\": {},\n  \"kills\": {},\n  \"weights_hash\": \"{hash:016x}\",\n  \"genome\": {}\n}}",
         game.seed,
         game.generation,
         best.id,
         game.score(best),
+        best.treats,
         best.tiles_walked,
         best.kills,
         brain.as_json(),

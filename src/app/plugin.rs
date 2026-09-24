@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use crate::launch::Launch;
 
 use super::auto_run::auto_run_epochs;
+use super::emoji_font::{configure_emoji_font, load_emoji_font};
 use super::hud::update_hud;
 use super::input::{handle_input, handle_window_close};
 use super::map_view::{apply_map_camera, handle_map_view};
@@ -43,10 +44,11 @@ impl Plugin for BattlePlugin {
                 zoom: 1.0,
             })
             .insert_resource(AutoRun::new(self.launch.max_step))
-            .add_systems(Startup, setup)
+            .add_systems(Startup, (load_emoji_font, setup).chain())
             .add_systems(
                 Update,
                 (
+                    configure_emoji_font,
                     handle_window_close,
                     handle_map_view,
                     apply_map_camera,

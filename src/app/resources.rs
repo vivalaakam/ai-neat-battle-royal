@@ -7,7 +7,7 @@ pub const MAP_ZOOM_MIN: f32 = 0.2;
 pub const MAP_ZOOM_MAX: f32 = 5.0;
 pub const MAP_ZOOM_FACTOR: f32 = 1.12;
 pub const MAP_PAN_SPEED: f32 = 480.0;
-pub const LEADERBOARD_PANEL_PX: f32 = 420.0;
+pub const LEADERBOARD_PANEL_PX: f32 = 360.0;
 pub const AUTO_TURN_INTERVAL_SECS: f32 = 0.04;
 
 #[derive(Resource)]

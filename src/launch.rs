@@ -1,7 +1,9 @@
 use std::env;
 
 use crate::game::models::load_all_models;
-use crate::game::{tournament_select, DEFAULT_PLAYER_COUNT, Game};
+use crate::game::{
+    tournament_select, DEFAULT_MAP_HEIGHT, DEFAULT_MAP_WIDTH, DEFAULT_PLAYER_COUNT, Game,
+};
 use crate::test::self_test;
 
 #[derive(Clone)]
@@ -19,8 +21,8 @@ impl Launch {
     pub fn parse() -> Self {
         let mut launch = Self {
             seed: "battle-royal".into(),
-            width: 50,
-            height: 30,
+            width: DEFAULT_MAP_WIDTH,
+            height: DEFAULT_MAP_HEIGHT,
             players: DEFAULT_PLAYER_COUNT,
             max_step: None,
             max_generation: None,
@@ -51,12 +53,13 @@ impl Launch {
     }
 
     pub fn validate(&self) {
+        let cells = Game::spawn_cell_count(self.width, self.height);
         assert!(
-            self.width >= 8
-                && self.height >= 8
+            self.width >= 16
+                && self.height >= 16
                 && self.players > 0
-                && self.players <= (self.width - 2) * (self.height - 2) / 2,
-            "invalid map size or player count"
+                && self.players <= cells,
+            "invalid map size or player count (need ≥1 spawn cell of 16×16 per player, have {cells})"
         );
     }
 
